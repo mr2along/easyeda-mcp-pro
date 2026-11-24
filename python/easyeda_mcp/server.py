@@ -187,9 +187,11 @@ async def easyeda_native_write_preview(method: str, params: dict[str, Any]) -> d
 
 def main() -> None:
     async def run() -> None:
+        # Keep MCP stdio and the editor WebSocket on the same asyncio loop.
+        # MCPServer.run() is synchronous and would create a nested event loop here.
         await bridge.start()
         try:
-            await mcp.run(transport="stdio")
+            await mcp.run_stdio_async()
         finally:
             await bridge.close()
     asyncio.run(run())
