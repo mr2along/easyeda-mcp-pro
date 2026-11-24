@@ -12,9 +12,9 @@ All coordinates are millimetres. The caller must normalize native EasyEDA data i
 - Component references, footprint courtyard polygons, pad IDs and local pad coordinates.
 - Existing component origin coordinates and rotation where available. Omit both coordinates to request initial placement.
 - Nets as pad-reference pairs.
-- Fixed/locked component flags, allowed rotations, optional allowed-region polygons, edge constraints, functional group labels, keepout polygons and board-specific clearance/grid values.
+- Explicit mount technology (`TH` or `SMD`), existing component side, optional reviewed side override, fixed/locked flags, allowed rotations, optional allowed-region polygons, edge constraints, functional group labels, side-aware keepouts and board-specific clearance/grid values.
 
-A component courtyard is expressed in local coordinates relative to its placement origin. Supported rotations are 0, 90, 180 and 270 degrees, with optional per-component rotation restrictions/locks. Optional allowed-region polygons and left/right/top/bottom edge constraints support functional partitioning and board-edge connectors. The board polygon is implicitly closed; do not repeat its first vertex. The current geometry model is polygonal; it does not yet model per-layer courtyard variants, copper zones, 3D body collision, or differential-pair escape geometry.
+Assembly-side policy is strict: `TH` components are placed on `TOP`; `SMD` components are placed on `BOTTOM`. `MIXED` and `UNKNOWN` technology block automatic placement unless a side override includes a non-empty engineering reason. If native data reports an existing side that conflicts with the technology rule, the placement is blocked for review. Components on opposite sides are not treated as same-side courtyard collisions in this 2D model; body-to-body interference across the board requires a separate 3D height/clearance check. A component courtyard is expressed in local coordinates relative to its placement origin. Supported rotations are 0, 90, 180 and 270 degrees, with optional per-component rotation restrictions/locks. Optional allowed-region polygons and left/right/top/bottom edge constraints support functional partitioning and board-edge connectors. The board polygon is implicitly closed; do not repeat its first vertex. The current geometry model is polygonal; it does not yet model per-layer courtyard variants, copper zones, 3D body collision, or differential-pair escape geometry.
 
 ## Placement sequence
 
@@ -38,8 +38,10 @@ Critical nets default to weight 3; other nets default to weight 1. A caller may 
 
 - No EasyEDA/native write occurs in this module.
 - No placement is marked route-approved.
+- Mount technology is explicit; reference designators and footprint names alone are not sufficient evidence to decide TH versus SMD.
+- THT-to-TOP and SMD-to-BOTTOM assignment is an assembly-side policy; it does not mean copper routing is restricted to the same side. Copper layers and vias are handled by the routing-rule engine.
 - An invalid existing placement, missing legal initial position, or geometry conflict must be resolved before routing.
-- The bridge adapter must read back the native board after an approved write and verify reference, x/y, rotation, outline containment, keepouts and DRC.
+- The bridge adapter must read back the native board after an approved write and verify reference, x/y, rotation, TOP/BOTTOM side, outline containment, side-aware keepouts and DRC.
 - The caller must provide accurate courtyard polygons and approved manufacturing clearances. A bounding-box approximation from footprint dimensions is not equivalent to native courtyard geometry.
 - Routing quality still requires congestion analysis, pad escape checks, net-class width/clearance rules, copper-layer constraints, thermal/high-voltage partitioning and a real router evaluation.
 
