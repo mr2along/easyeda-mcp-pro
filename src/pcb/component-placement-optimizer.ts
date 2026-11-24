@@ -7,7 +7,9 @@
  */
 
 export interface Point2D { x: number; y: number }
-export interface PlacementPolygon { id?: string; points: Point2D[] }
+export type ComponentSide = 'TOP' | 'BOTTOM';
+export type MountTechnology = 'TH' | 'SMD' | 'MIXED' | 'UNKNOWN';
+export interface PlacementPolygon { id?: string; points: Point2D[]; side?: ComponentSide }
 
 export interface PlacementPad {
   id: string;
@@ -18,6 +20,12 @@ export interface PlacementPad {
 
 export interface PlacementComponent {
   ref: string;
+  /** Explicit footprint assembly technology; never infer from refdes alone. */
+  mountTechnology: MountTechnology;
+  /** Optional side override for reviewed hybrid/exceptional footprints. */
+  sideOverride?: { side: ComponentSide; reason: string };
+  /** Existing component side, if the native PCB reports it. */
+  side?: ComponentSide;
   /** Existing placement; omit x/y to request initial placement. */
   x?: number;
   y?: number;
@@ -64,6 +72,7 @@ export interface PlacedComponent {
   x: number;
   y: number;
   rotationDeg: 0 | 90 | 180 | 270;
+  side: ComponentSide;
   fixed: boolean;
 }
 
@@ -96,6 +105,7 @@ interface InternalPlacement {
   x: number;
   y: number;
   rotationDeg: 0 | 90 | 180 | 270;
+  side: ComponentSide;
 }
 
 interface Bounds { minX: number; minY: number; maxX: number; maxY: number }
@@ -234,11 +244,20 @@ function allowedRotations(component: PlacementComponent): Array<0 | 90 | 180 | 2
   return [...new Set(requested)];
 }
 
+function requiredComponentSide(component: PlacementComponent): ComponentSide | undefined {
+  if (component.sideOverride?.side) return component.sideOverride.side;
+  if (component.mountTechnology === 'TH') return 'TOP';
+  if (component.mountTechnology === 'SMD') return 'BOTTOM';
+  return undefined;
+}
+
 function legalPlacement(
   candidate: InternalPlacement,
   placed: InternalPlacement[],
   board: PlacementBoard,
 ): boolean {
+  const requiredSide = requiredComponentSide(candidate.component);
+  if (!requiredSide || candidate.side !== requiredSide) return false;
   const shape = transformPolygon(candidate);
   const edgeClearance = Math.max(board.edgeClearanceMm ?? 0, candidate.component.edgeClearanceMm ?? 0);
   if (!polygonInsideBoard(shape, board.outline, edgeClearance)) return false;
@@ -255,10 +274,11 @@ function legalPlacement(
     if (edgeDistance > edgeConstraint.maxDistanceMm + EPSILON) return false;
   }
   for (const keepout of board.keepouts ?? []) {
-    if (polygonsIntersect(shape, keepout.points)) return false;
+    if ((!keepout.side || keepout.side === candidate.side) && polygonsIntersect(shape, keepout.points)) return false;
   }
   const spacing = board.componentClearanceMm ?? 0;
   for (const other of placed) {
+    if (other.side !== candidate.side) continue;
     if (other.component.ref === candidate.component.ref) continue;
     if (polygonDistance(shape, transformPolygon(other)) + EPSILON < spacing) return false;
   }
@@ -374,6 +394,7 @@ function initializeMissing(
       x: component.x!,
       y: component.y!,
       rotationDeg: component.rotationDeg ?? 0,
+      side: component.side ?? requiredComponentSide(component) ?? 'TOP',
     });
   }
 
@@ -385,7 +406,7 @@ function initializeMissing(
       for (let y = outlineBounds.minY; y <= outlineBounds.maxY && checked < maxCandidates; y += grid * 2) {
         for (let x = outlineBounds.minX; x <= outlineBounds.maxX && checked < maxCandidates; x += grid * 2) {
           checked++;
-          const candidate: InternalPlacement = { component, x, y, rotationDeg };
+          const candidate: InternalPlacement = { component, x, y, rotationDeg, side: requiredComponentSide(component) ?? 'TOP' };
           if (!legalPlacement(candidate, placements, board)) continue;
           const current = computeMetrics([...placements, candidate], components, nets, board);
           const priority = component.placementPriority ?? 1;
@@ -434,6 +455,15 @@ export function optimizeComponentPlacement(
   for (const component of components) {
     if (refs.has(component.ref)) blockers.push(`Duplicate component reference: ${component.ref}`);
     refs.add(component.ref);
+    if (!requiredComponentSide(component)) {
+      blockers.push(`Component ${component.ref} has mount technology ${component.mountTechnology}; classify as TH or SMD, or provide a reviewed side override with a reason.`);
+    }
+    if (component.sideOverride && !component.sideOverride.reason.trim()) {
+      blockers.push(`Component ${component.ref} side override requires an engineering reason.`);
+    }
+    if (component.side && requiredComponentSide(component) && component.side !== requiredComponentSide(component)) {
+      blockers.push(`Component ${component.ref} is on ${component.side} but its mount technology requires ${requiredComponentSide(component)}.`);
+    }
     if (component.courtyard.length < 3) blockers.push(`Component ${component.ref} has no valid courtyard polygon.`);
     if (component.allowedRotations?.some((rotation) => !ROTATIONS.includes(rotation))) {
       blockers.push(`Component ${component.ref} has an unsupported allowed rotation.`);
@@ -549,6 +579,7 @@ export function optimizeComponentPlacement(
       x: item.x,
       y: item.y,
       rotationDeg: item.rotationDeg,
+      side: item.side,
       fixed: Boolean(item.component.fixed),
     })),
     metrics: bestMetrics,
