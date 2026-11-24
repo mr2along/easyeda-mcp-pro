@@ -12,16 +12,16 @@ All coordinates are millimetres. The caller must normalize native EasyEDA data i
 - Component references, footprint courtyard polygons, pad IDs and local pad coordinates.
 - Existing component origin coordinates and rotation where available. Omit both coordinates to request initial placement.
 - Nets as pad-reference pairs.
-- Fixed/locked component flags, functional group labels, keepout polygons and board-specific clearance/grid values.
+- Fixed/locked component flags, allowed rotations, optional allowed-region polygons, edge constraints, functional group labels, keepout polygons and board-specific clearance/grid values.
 
-A component courtyard is expressed in local coordinates relative to its placement origin. Supported rotations are 0, 90, 180 and 270 degrees. The current geometry model is polygonal; it does not yet model per-layer courtyard variants, copper zones, 3D body collision, or differential-pair escape geometry.
+A component courtyard is expressed in local coordinates relative to its placement origin. Supported rotations are 0, 90, 180 and 270 degrees, with optional per-component rotation restrictions/locks. Optional allowed-region polygons and left/right/top/bottom edge constraints support functional partitioning and board-edge connectors. The board polygon is implicitly closed; do not repeat its first vertex. The current geometry model is polygonal; it does not yet model per-layer courtyard variants, copper zones, 3D body collision, or differential-pair escape geometry.
 
 ## Placement sequence
 
 1. Validate board outline, component references and courtyard polygons.
 2. Preserve fixed components and existing placement coordinates.
 3. Seed unplaced components using deterministic area-descending, grid-scanned legal placement.
-4. Reject candidate positions outside the outline, inside keepouts, or closer than the configured courtyard clearance.
+4. Enforce board-edge clearance, keepouts, allowed placement regions, allowed rotations, connector-to-edge constraints and courtyard-to-courtyard clearance.
 5. Run seeded simulated annealing over translation and orthogonal rotation.
 6. Score weighted net half-perimeter wire length (HPWL), functional-group dispersion and a normalized routing-pressure heuristic.
 7. Return a preview, blockers, warnings and metrics. Human approval remains mandatory.
