@@ -70,6 +70,23 @@ describe('native PCB automation pipeline', () => {
     expect(() => normalizeNativePcbSnapshot(payload)).toThrow(/courtyards-not-exact/);
   });
 
+  it('rejects self-intersecting native board outlines', () => {
+    const payload = nativePayload();
+    payload.board.outline = [
+      { x: 0, y: 0 },
+      { x: 20, y: 20 },
+      { x: 0, y: 20 },
+      { x: 20, y: 0 },
+    ];
+    expect(() => normalizeNativePcbSnapshot(payload)).toThrow(/board-outline-self-intersects/);
+  });
+
+  it('rejects pad-to-net membership that disagrees with the native netlist', () => {
+    const payload = nativePayload();
+    payload.components[0]!.pads![0]!.net = 'GND';
+    expect(() => normalizeNativePcbSnapshot(payload)).toThrow(/pad-net-membership-mismatch/);
+  });
+
   it('builds a read-only placement preview from exact native evidence', async () => {
     const adapter = {
       extractNativeSnapshot: vi.fn(async () => nativePayload()),
