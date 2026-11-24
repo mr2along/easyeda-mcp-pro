@@ -224,7 +224,10 @@ function snap(value: number, grid: number): number {
 }
 
 function allowedRotations(component: PlacementComponent): Array<0 | 90 | 180 | 270> {
-  if (component.rotationLocked) return [component.rotationDeg ?? 0];
+  if (component.rotationLocked) {
+    if (component.rotationDeg !== undefined) return [component.rotationDeg];
+    return [component.allowedRotations?.[0] ?? 0];
+  }
   const requested = component.allowedRotations?.length
     ? component.allowedRotations
     : [...ROTATIONS];
@@ -434,6 +437,10 @@ export function optimizeComponentPlacement(
     if (component.courtyard.length < 3) blockers.push(`Component ${component.ref} has no valid courtyard polygon.`);
     if (component.allowedRotations?.some((rotation) => !ROTATIONS.includes(rotation))) {
       blockers.push(`Component ${component.ref} has an unsupported allowed rotation.`);
+    }
+    if (component.rotationDeg !== undefined && component.allowedRotations?.length &&
+        !component.allowedRotations.includes(component.rotationDeg)) {
+      blockers.push(`Component ${component.ref} current rotation is outside its allowed rotations.`);
     }
     if (component.edgeConstraint && component.edgeConstraint.maxDistanceMm < 0) {
       blockers.push(`Component ${component.ref} has a negative edge-constraint distance.`);
