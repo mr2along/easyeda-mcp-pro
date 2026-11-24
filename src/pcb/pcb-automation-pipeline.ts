@@ -804,7 +804,24 @@ export async function runApprovedNativeAutorouting(
       savePerformed: false,
     };
   }
-  if ((feedback.unroutedNetCount ?? 0) > 0 || (feedback.failedNetNames?.length ?? 0) > 0) {
+  // A COMPLETED status alone is not evidence that every requested net was
+  // routed. Missing accounting used to default to zero and could falsely
+  // promote an incomplete route to success. Require explicit native counts.
+  const hasCompleteNetAccounting =
+    Number.isInteger(feedback.unroutedNetCount) &&
+    (feedback.unroutedNetCount as number) >= 0 &&
+    Array.isArray(feedback.failedNetNames) &&
+    feedback.failedNetNames.every((name) => typeof name === 'string' && name.trim().length > 0);
+  if (!hasCompleteNetAccounting) {
+    return {
+      status: 'ROUTING_INCOMPLETE',
+      routerFeedback: feedback,
+      blockers: ['native-router-did-not-report-complete-net-accounting'],
+      nativeWritePerformed: true,
+      savePerformed: false,
+    };
+  }
+  if (feedback.unroutedNetCount !== 0 || feedback.failedNetNames.length !== 0) {
     return {
       status: 'ROUTING_INCOMPLETE',
       routerFeedback: feedback,
