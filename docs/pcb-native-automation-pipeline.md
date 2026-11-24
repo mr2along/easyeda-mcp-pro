@@ -52,7 +52,7 @@ The adapter must return:
 - Complete native net-to-pad membership.
 - Focused project/document identity and a stable snapshot fingerprint.
 
-`normalizeNativePcbSnapshot` fails closed if any required geometry or net-membership evidence is missing. It does not infer courtyard from body dimensions, infer THT/SMD from reference designators, or treat a board bounding box as an outline.
+`normalizeNativePcbSnapshot` fails closed if any required geometry or net-membership evidence is missing. It also rejects non-finite/zero-area/self-intersecting board and courtyard polygons, duplicate component/pad/net identities, unresolved net pins, pads assigned to multiple nets, and pad-to-net membership mismatches. It does not infer courtyard from body dimensions, infer THT/SMD from reference designators, or treat a board bounding box as an outline.
 
 ### Current native bridge evidence and gap
 
