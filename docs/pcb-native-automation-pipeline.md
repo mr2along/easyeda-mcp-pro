@@ -81,7 +81,7 @@ The preview calculates three geometry proxies:
 
 These are placement heuristics, not copper routes, DRC proof, or route-success probabilities. A native router result is stored separately and labelled `NATIVE_ROUTER`; it can report unrouted nets, failed nets, routed length, vias and DRC violations. If the native router adapter is absent, the pipeline labels the result `GEOMETRY_HEURISTIC` and warns accordingly.
 
-The current bridge has route-context export and primitive add-track methods, but no verified end-to-end native auto-router operation in the dispatcher contract inspected for this change. Do not report actual routing feedback until a real router adapter is implemented and tested.
+The EasyEDA Pro API reference documents `PCB_Document.autoRouting(props)` as a beta API available since EDA v3.2.150. It performs routing on the focused PCB; it is not a read-only estimator. The API can take up to 900 seconds and has a fixed 15-minute hard limit. The newer `startAutoRouting` job model is documented from v4.1.79, so it must not be assumed available on the repository's earlier verified 3.2.209 runtime. The pipeline therefore keeps native autorouting out of Placement Preview and exposes it as a separate, explicitly approved write action through `runApprovedNativeAutorouting`. The adapter must preserve existing tracks/vias by default, use only enabled copper layers, return the native router result, then trigger read-back and DRC. The currently implemented route post-check verifies document identity and DRC; a complete native track/via inventory comparison remains a follow-up requirement before marking route geometry as independently read-back verified.
 
 ## 4. Native Apply
 
@@ -109,7 +109,8 @@ After a fully verified write, the adapter must re-read native component state an
 | Exact native snapshot contract and fail-closed normalizer | Implemented | Not connected; courtyard and exact outline extraction still need native API verification |
 | Placement preview | Implemented using existing optimizer | Waiting for exact extractor payload |
 | Pad escape / crossing / congestion proxies | Implemented | Uses normalized geometry only |
-| Native router feedback contract | Implemented | No verified router method is currently wired |
+| Read-only router-analysis contract | Implemented | Adapter not wired |
+| Explicitly approved native autorouter call + post-route DRC | Implemented as adapter contract | EasyEDA beta API adapter not wired; route geometry read-back still needed |
 | Approval/fingerprint gate and apply/read-back/DRC orchestration | Implemented as adapter contract | Native write adapter not wired to dispatcher |
 | Tests | Added | Not executed in this environment |
 
@@ -122,4 +123,5 @@ After a fully verified write, the adapter must re-read native component state an
 5. Keep preview and router analysis read-only.
 6. Apply only the exact approved proposal after fresh fingerprint validation.
 7. Verify native position/rotation/side read-back, then run PCB DRC. Never auto-save.
-8. Add live smoke tests against supported EasyEDA versions before enabling the adapter in the default tool profile.
+8. Use `PCB_Document.autoRouting` only as a separately approved mutation; enforce its 900-second hard limit and only pass enabled copper layers.
+9. Add live smoke tests against supported EasyEDA versions before enabling the adapter in the default tool profile.
