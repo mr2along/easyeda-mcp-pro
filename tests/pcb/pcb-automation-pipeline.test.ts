@@ -281,4 +281,35 @@ describe('approved native autorouting', () => {
     }));
     expect(adapter.runPcbDrc).toHaveBeenCalledTimes(1);
   });
+
+  it('does not treat missing native unrouted-net accounting as a completed route', async () => {
+    const payload = nativePayload();
+    const adapter: PcbAutomationAdapter = {
+      extractNativeSnapshot: vi.fn(async () => payload),
+      runNativeAutorouting: vi.fn(async () => ({ status: 'COMPLETED' })),
+      applyPlacementChanges: vi.fn(),
+      readBackAndCompare: vi.fn(),
+      runPcbDrc: vi.fn(),
+    };
+    const result = await runApprovedNativeAutorouting(
+      adapter,
+      {
+        approved: true,
+        operation: 'NATIVE_AUTOROUTE',
+        routingNets: ['VIN'],
+        ignoreNets: ['GND'],
+        enabledLayers: [1, 2],
+        keepExistingTracksAndVias: true,
+        optimization: 'COMPLETION',
+        proposalId: 'pcbprop_12345678',
+        sourceFingerprint: payload.fingerprint,
+        projectUuid: 'project-1',
+        documentUuid: 'pcb-1',
+      },
+      payload.fingerprint,
+    );
+    expect(result.status).toBe('ROUTING_INCOMPLETE');
+    expect(result.blockers).toContain('native-router-did-not-report-complete-net-accounting');
+    expect(adapter.runPcbDrc).not.toHaveBeenCalled();
+  });
 });
