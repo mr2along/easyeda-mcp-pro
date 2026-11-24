@@ -56,7 +56,7 @@ describe('component placement optimizer', () => {
 
   it('blocks a starting placement outside the board', () => {
     const result = optimizeComponentPlacement([
-      { ref: 'U1', x: -20, y: -20, fixed: true, courtyard: square },
+      { ref: 'U1', mountTechnology: 'TH', x: -20, y: -20, fixed: true, courtyard: square },
     ], [], board);
 
     expect(result.status).toBe('NO_FEASIBLE_PLACEMENT');
