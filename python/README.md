@@ -5,7 +5,7 @@ The EasyEDA Pro .eext JavaScript extension remains a minimal transport adapter b
 Extension API is only exposed inside EasyEDA's JavaScript runtime.
 
 Install with pip install -e . and run easyeda-mcp-pro. Configure the extension to connect to
-ws://127.0.0.1:8765. MCP uses stdio.
+ws://127.0.0.1:49620. MCP uses stdio.
 
 This first migration slice implements the Python MCP entry point, bridge handshake, native method
 allowlist, read-only native calls and fail-closed write previews. It does not yet port every existing
