@@ -191,12 +191,23 @@ export interface NativeDrcResult {
 
 export interface PcbAutomationAdapter {
   extractNativeSnapshot(): Promise<NativePcbExtractionPayload>;
-  /** Optional actual router integration. Never substitute heuristic scores for this result. */
-  runNativeRouter?(input: {
+  /** Optional read-only router-analysis integration. Must not modify the focused PCB. */
+  evaluateRoutingReadOnly?(input: {
     projectUuid: string;
     documentUuid: string;
     sourceFingerprint: string;
     proposalId: string;
+  }): Promise<RoutingAnalysis['routerFeedback']>;
+  /**
+   * Actual EasyEDA PCB_Document.autoRouting is a mutating beta API. It is exposed
+   * separately and may only be called through runApprovedNativeAutorouting().
+   */
+  runNativeAutorouting?(input: {
+    projectUuid: string;
+    documentUuid: string;
+    expectedFingerprint: string;
+    proposalId: string;
+    confirmWrite: true;
   }): Promise<RoutingAnalysis['routerFeedback']>;
   /**
    * Adapter must check focused document identity and perform all writes under the
@@ -434,7 +445,7 @@ function proposalId(snapshot: NativePcbSnapshot, placements: PlacementResult): s
 }
 
 export async function createPcbPlacementPreview(
-  adapter: Pick<PcbAutomationAdapter, 'extractNativeSnapshot' | 'runNativeRouter'>,
+  adapter: Pick<PcbAutomationAdapter, 'extractNativeSnapshot' | 'evaluateRoutingReadOnly'>,
   options: PreviewOptions = {},
 ): Promise<PcbPlacementPreview> {
   const payload = await adapter.extractNativeSnapshot();
@@ -466,9 +477,9 @@ export async function createPcbPlacementPreview(
     options.placement,
   );
   let routerFeedback: RoutingAnalysis['routerFeedback'];
-  if (options.runRouter && adapter.runNativeRouter && placement.status === 'PREVIEW_READY') {
+  if (options.runRouter && adapter.evaluateRoutingReadOnly && placement.status === 'PREVIEW_READY') {
     try {
-      routerFeedback = await adapter.runNativeRouter({
+      routerFeedback = await adapter.evaluateRoutingReadOnly({
         projectUuid: snapshot.identity.projectUuid,
         documentUuid: snapshot.identity.documentUuid,
         sourceFingerprint: snapshot.fingerprint,
@@ -481,7 +492,7 @@ export async function createPcbPlacementPreview(
       };
     }
   } else if (options.runRouter) {
-    routerFeedback = { status: 'UNAVAILABLE', message: 'Native router adapter is not connected.' };
+    routerFeedback = { status: 'UNAVAILABLE', message: 'Read-only router-analysis adapter is not connected. EasyEDA native autorouting is a separate approved write action.' };
   }
 
   const routing = placement.status === 'PREVIEW_READY'
@@ -667,4 +678,147 @@ export async function applyApprovedPcbPlacement(
     nativeWritePerformed: true,
     savePerformed: false,
   };
+}
+
+
+export interface NativeAutorouteResult {
+  status: 'ROUTED_AND_DRC_VERIFIED' | 'ROUTER_NOT_AVAILABLE' | 'STALE_BOARD' |
+    'ROUTER_FAILED' | 'ROUTING_INCOMPLETE' | 'DRC_FAILED' | 'POST_ROUTE_CHECK_FAILED';
+  routerFeedback?: RoutingAnalysis['routerFeedback'];
+  drc?: NativeDrcResult;
+  blockers: string[];
+  nativeWritePerformed: boolean;
+  savePerformed: false;
+}
+
+/**
+ * Runs EasyEDA's native autorouter only after a separate explicit approval.
+ * This is intentionally not called by createPcbPlacementPreview: the native
+ * autorouter changes the PCB and is not a read-only preview operation.
+ */
+export async function runApprovedNativeAutorouting(
+  adapter: PcbAutomationAdapter,
+  approval: ApplyApproval,
+  expectedFingerprint: string,
+): Promise<NativeAutorouteResult> {
+  if (!approval || approval.approved !== true ||
+      !approval.proposalId || !approval.projectUuid || !approval.documentUuid ||
+      !expectedFingerprint || approval.sourceFingerprint !== expectedFingerprint) {
+    return {
+      status: 'STALE_BOARD',
+      blockers: ['explicit-router-approval-and-matching-fingerprint-required'],
+      nativeWritePerformed: false,
+      savePerformed: false,
+    };
+  }
+  if (!adapter.runNativeAutorouting) {
+    return {
+      status: 'ROUTER_NOT_AVAILABLE',
+      blockers: ['native-autorouter-adapter-not-connected'],
+      nativeWritePerformed: false,
+      savePerformed: false,
+    };
+  }
+
+  try {
+    const before = normalizeNativePcbSnapshot(await adapter.extractNativeSnapshot());
+    if (before.fingerprint !== expectedFingerprint ||
+        before.identity.projectUuid !== approval.projectUuid ||
+        before.identity.documentUuid !== approval.documentUuid) {
+      return {
+        status: 'STALE_BOARD',
+        blockers: ['board-changed-before-native-autorouting'],
+        nativeWritePerformed: false,
+        savePerformed: false,
+      };
+    }
+  } catch {
+    return {
+      status: 'STALE_BOARD',
+      blockers: ['fresh-native-snapshot-unavailable-before-autorouting'],
+      nativeWritePerformed: false,
+      savePerformed: false,
+    };
+  }
+
+  let feedback: RoutingAnalysis['routerFeedback'];
+  try {
+    feedback = await adapter.runNativeAutorouting({
+      projectUuid: approval.projectUuid,
+      documentUuid: approval.documentUuid,
+      expectedFingerprint,
+      proposalId: approval.proposalId,
+      confirmWrite: true,
+    });
+  } catch (error) {
+    return {
+      status: 'ROUTER_FAILED',
+      blockers: [
+        'native-autorouter-outcome-may-have-modified-board',
+        error instanceof Error ? error.message : String(error),
+      ],
+      nativeWritePerformed: true,
+      savePerformed: false,
+    };
+  }
+
+  if (!feedback || feedback.status !== 'COMPLETED') {
+    return {
+      status: 'ROUTER_FAILED',
+      routerFeedback: feedback,
+      blockers: ['native-autorouter-did-not-report-completed'],
+      nativeWritePerformed: true,
+      savePerformed: false,
+    };
+  }
+  if ((feedback.unroutedNetCount ?? 0) > 0 || (feedback.failedNetNames?.length ?? 0) > 0) {
+    return {
+      status: 'ROUTING_INCOMPLETE',
+      routerFeedback: feedback,
+      blockers: ['native-autorouter-left-unrouted-or-failed-nets'],
+      nativeWritePerformed: true,
+      savePerformed: false,
+    };
+  }
+
+  try {
+    const after = normalizeNativePcbSnapshot(await adapter.extractNativeSnapshot());
+    if (after.identity.projectUuid !== approval.projectUuid ||
+        after.identity.documentUuid !== approval.documentUuid) {
+      return {
+        status: 'POST_ROUTE_CHECK_FAILED',
+        routerFeedback: feedback,
+        blockers: ['focused-document-changed-after-autorouting'],
+        nativeWritePerformed: true,
+        savePerformed: false,
+      };
+    }
+    const drc = await adapter.runPcbDrc();
+    if (!drc.passed || drc.errorCount > 0) {
+      return {
+        status: 'DRC_FAILED',
+        routerFeedback: feedback,
+        drc,
+        blockers: ['post-autoroute-pcb-drc-has-errors'],
+        nativeWritePerformed: true,
+        savePerformed: false,
+      };
+    }
+    return {
+      status: 'ROUTED_AND_DRC_VERIFIED',
+      routerFeedback: feedback,
+      drc,
+      blockers: [],
+      nativeWritePerformed: true,
+      savePerformed: false,
+    };
+  } catch (error) {
+    return {
+      status: 'POST_ROUTE_CHECK_FAILED',
+      routerFeedback: feedback,
+      blockers: [`post-autoroute-readback-or-drc-failed:${error instanceof Error ? error.message : String(error)}`],
+      nativeWritePerformed: true,
+      savePerformed: false,
+    };
+  }
 }
