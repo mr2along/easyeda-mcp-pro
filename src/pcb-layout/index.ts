@@ -1,5 +1,7 @@
 export { planComponentGroupPlacement, planRoutePath } from './planner.js';
 export { planFloorplan } from './floorplan.js';
+export * from './geometry.js';
+export * from './normalized-model.js';
 export type {
   BoardBox,
   ComponentGroupPlacementInput,
