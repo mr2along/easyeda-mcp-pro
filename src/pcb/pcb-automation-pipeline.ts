@@ -46,6 +46,52 @@ export interface NativePcbExtractionPayload {
   fingerprint: string;
 }
 
+function isFinitePolygon(value: unknown): value is Array<{ x: number; y: number }> {
+  return Array.isArray(value) && value.length >= 3 &&
+    value.every((point) => point !== null && typeof point === 'object' &&
+      Number.isFinite((point as { x?: unknown }).x) &&
+      Number.isFinite((point as { y?: unknown }).y));
+}
+
+function polygonArea(points: Array<{ x: number; y: number }>): number {
+  let twiceArea = 0;
+  for (let i = 0; i < points.length; i++) {
+    const current = points[i]!;
+    const next = points[(i + 1) % points.length]!;
+    twiceArea += current.x * next.y - next.x * current.y;
+  }
+  return Math.abs(twiceArea) / 2;
+}
+
+function segmentsIntersect(
+  a: { x: number; y: number }, b: { x: number; y: number },
+  c: { x: number; y: number }, d: { x: number; y: number },
+): boolean {
+  const cross = (p: typeof a, q: typeof a, r: typeof a) =>
+    (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+  const onSegment = (p: typeof a, q: typeof a, r: typeof a) =>
+    Math.abs(cross(p, q, r)) < 1e-8 &&
+    r.x >= Math.min(p.x, q.x) - 1e-8 && r.x <= Math.max(p.x, q.x) + 1e-8 &&
+    r.y >= Math.min(p.y, q.y) - 1e-8 && r.y <= Math.max(p.y, q.y) + 1e-8;
+  const abC = cross(a, b, c), abD = cross(a, b, d);
+  const cdA = cross(c, d, a), cdB = cross(c, d, b);
+  if (((abC > 1e-8 && abD < -1e-8) || (abC < -1e-8 && abD > 1e-8)) &&
+      ((cdA > 1e-8 && cdB < -1e-8) || (cdA < -1e-8 && cdB > 1e-8))) return true;
+  return onSegment(a, b, c) || onSegment(a, b, d) ||
+    onSegment(c, d, a) || onSegment(c, d, b);
+}
+
+function hasSelfIntersection(points: Array<{ x: number; y: number }>): boolean {
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i]!, b = points[(i + 1) % points.length]!;
+    for (let j = i + 1; j < points.length; j++) {
+      if (j === i || j === (i + 1) % points.length || (j + 1) % points.length === i) continue;
+      if (segmentsIntersect(a, b, points[j]!, points[(j + 1) % points.length]!)) return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Strict boundary between native EasyEDA values and the optimizer's normalized
  * model. The bridge must provide exact geometry; this function never fabricates
@@ -62,8 +108,11 @@ export function normalizeNativePcbSnapshot(
   if (!payload.fingerprint || payload.fingerprint.trim().length < 16) {
     blockers.push('native-snapshot-fingerprint-missing-or-invalid');
   }
-  if (!Array.isArray(payload.board?.outline) || payload.board.outline.length < 3) {
-    blockers.push('exact-board-outline-unavailable');
+  if (!isFinitePolygon(payload.board?.outline)) {
+    blockers.push('exact-board-outline-unavailable-or-invalid');
+  } else {
+    if (polygonArea(payload.board.outline) <= 1e-8) blockers.push('board-outline-has-zero-area');
+    if (hasSelfIntersection(payload.board.outline)) blockers.push('board-outline-self-intersects');
   }
   if (!payload.extraction?.outlineExact) blockers.push('board-outline-not-exact');
   if (!payload.extraction?.courtyardsExact) blockers.push('component-courtyards-not-exact');
@@ -71,23 +120,82 @@ export function normalizeNativePcbSnapshot(
   if (!payload.extraction?.netsExact) blockers.push('native-net-membership-not-exact');
   if (!payload.extraction?.positionsExact) blockers.push('native-component-positions-not-exact');
 
-  for (const component of payload.components ?? []) {
+  const components = Array.isArray(payload.components) ? payload.components : [];
+  const nets = Array.isArray(payload.nets) ? payload.nets : [];
+  if (!Array.isArray(payload.components)) blockers.push('native-component-inventory-unavailable');
+  if (!Array.isArray(payload.nets)) blockers.push('native-net-inventory-unavailable');
+
+  const byRef = new Map<string, PlacementComponent>();
+  const byPrimitiveId = new Set<string>();
+  for (const component of components) {
     if (!component.ref || !component.mountTechnology || !component.primitiveId) {
       blockers.push('component-reference-or-mount-technology-missing');
-      break;
+      continue;
     }
-    if (!Array.isArray(component.courtyard) || component.courtyard.length < 3) {
-      blockers.push(`exact-courtyard-missing:${component.ref}`);
+    if (byRef.has(component.ref)) blockers.push(`duplicate-component-reference:${component.ref}`);
+    if (byPrimitiveId.has(component.primitiveId)) blockers.push(`duplicate-component-primitive-id:${component.primitiveId}`);
+    byRef.set(component.ref, component);
+    byPrimitiveId.add(component.primitiveId);
+
+    if (!isFinitePolygon(component.courtyard)) {
+      blockers.push(`exact-courtyard-missing-or-invalid:${component.ref}`);
+    } else {
+      if (polygonArea(component.courtyard) <= 1e-8) blockers.push(`courtyard-has-zero-area:${component.ref}`);
+      if (hasSelfIntersection(component.courtyard)) blockers.push(`courtyard-self-intersects:${component.ref}`);
     }
     if (!Array.isArray(component.pads)) {
       blockers.push(`native-pad-list-missing:${component.ref}`);
+    } else {
+      const padIds = new Set<string>();
+      for (const pad of component.pads) {
+        if (!pad.id || !Number.isFinite(pad.x) || !Number.isFinite(pad.y)) {
+          blockers.push(`native-pad-geometry-invalid:${component.ref}`);
+          continue;
+        }
+        if (padIds.has(pad.id)) blockers.push(`duplicate-pad-id:${component.ref}:${pad.id}`);
+        padIds.add(pad.id);
+      }
     }
     if (!Number.isFinite(component.x) || !Number.isFinite(component.y)) {
       blockers.push(`native-placement-missing:${component.ref}`);
     }
   }
+
+  const netNames = new Set<string>();
+  const membership = new Set<string>();
+  for (const net of nets) {
+    if (!net.name || netNames.has(net.name)) {
+      blockers.push(`native-net-name-missing-or-duplicate:${net.name || 'UNKNOWN'}`);
+      continue;
+    }
+    netNames.add(net.name);
+    if (!Array.isArray(net.pins)) {
+      blockers.push(`native-net-pin-list-missing:${net.name}`);
+      continue;
+    }
+    for (const pin of net.pins) {
+      const component = byRef.get(pin.ref);
+      const pad = component?.pads?.find((candidate) => candidate.id === pin.padId);
+      const key = `${pin.ref}\u0000${pin.padId}`;
+      if (!component || !pad) {
+        blockers.push(`net-pin-reference-unresolved:${net.name}:${pin.ref}:${pin.padId}`);
+        continue;
+      }
+      if (membership.has(key)) blockers.push(`pad-assigned-to-multiple-nets:${pin.ref}:${pin.padId}`);
+      membership.add(key);
+      if (pad.net !== net.name) blockers.push(`pad-net-membership-mismatch:${pin.ref}:${pin.padId}`);
+    }
+  }
+  for (const component of components) {
+    for (const pad of component.pads ?? []) {
+      if (pad.net && !membership.has(`${component.ref}\u0000${pad.id}`)) {
+        blockers.push(`pad-net-missing-from-native-netlist:${component.ref}:${pad.id}`);
+      }
+    }
+  }
+
   if (blockers.length > 0) {
-    throw new NativePcbExtractionError(blockers, payload.extraction?.warnings ?? []);
+    throw new NativePcbExtractionError([...new Set(blockers)], payload.extraction?.warnings ?? []);
   }
 
   return {
