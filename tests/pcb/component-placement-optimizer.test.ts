@@ -128,6 +128,20 @@ describe('component placement optimizer', () => {
     expect(result.blockers.some((item) => item.includes('classify as TH or SMD'))).toBe(true);
   });
 
+  it('does not allow a side override to move SMD to TOP', () => {
+    const result = optimizeComponentPlacement([
+      {
+        ref: 'R1',
+        mountTechnology: 'SMD',
+        sideOverride: { side: 'TOP', reason: 'Should not bypass assembly policy' },
+        courtyard: square,
+      },
+    ], [], board);
+
+    expect(result.status).toBe('NO_FEASIBLE_PLACEMENT');
+    expect(result.blockers.some((item) => item.includes('SMD and cannot override'))).toBe(true);
+  });
+
   it('allows a reviewed side override for an exceptional footprint', () => {
     const result = optimizeComponentPlacement([
       {
