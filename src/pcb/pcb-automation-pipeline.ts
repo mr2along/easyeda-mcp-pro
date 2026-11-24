@@ -207,6 +207,11 @@ export interface PcbAutomationAdapter {
     documentUuid: string;
     expectedFingerprint: string;
     proposalId: string;
+    routingNets: string[];
+    ignoreNets: string[];
+    enabledLayers: number[];
+    keepExistingTracksAndVias: true;
+    optimization: 'SPEED' | 'COMPLETION';
     confirmWrite: true;
   }): Promise<RoutingAnalysis['routerFeedback']>;
   /**
@@ -681,6 +686,23 @@ export async function applyApprovedPcbPlacement(
 }
 
 
+export interface NativeAutorouteApproval {
+  approved: true;
+  operation: 'NATIVE_AUTOROUTE';
+  proposalId: string;
+  sourceFingerprint: string;
+  projectUuid: string;
+  documentUuid: string;
+  /** Explicit net scope; empty means invalid rather than silently routing every net. */
+  routingNets: string[];
+  ignoreNets: string[];
+  /** Only enabled copper layers are accepted by the EasyEDA API. */
+  enabledLayers: number[];
+  /** Safe default: retain existing tracks and vias. */
+  keepExistingTracksAndVias: true;
+  optimization: 'SPEED' | 'COMPLETION';
+}
+
 export interface NativeAutorouteResult {
   status: 'ROUTED_AND_DRC_VERIFIED' | 'ROUTER_NOT_AVAILABLE' | 'STALE_BOARD' |
     'ROUTER_FAILED' | 'ROUTING_INCOMPLETE' | 'DRC_FAILED' | 'POST_ROUTE_CHECK_FAILED';
@@ -698,12 +720,18 @@ export interface NativeAutorouteResult {
  */
 export async function runApprovedNativeAutorouting(
   adapter: PcbAutomationAdapter,
-  approval: ApplyApproval,
+  approval: NativeAutorouteApproval,
   expectedFingerprint: string,
 ): Promise<NativeAutorouteResult> {
-  if (!approval || approval.approved !== true ||
+  if (!approval || approval.approved !== true || approval.operation !== 'NATIVE_AUTOROUTE' ||
       !approval.proposalId || !approval.projectUuid || !approval.documentUuid ||
-      !expectedFingerprint || approval.sourceFingerprint !== expectedFingerprint) {
+      !expectedFingerprint || approval.sourceFingerprint !== expectedFingerprint ||
+      !Array.isArray(approval.routingNets) || approval.routingNets.length === 0 ||
+      !Array.isArray(approval.ignoreNets) || !Array.isArray(approval.enabledLayers) ||
+      approval.enabledLayers.length === 0 ||
+      approval.enabledLayers.some((layer) => !(layer === 1 || layer === 2 || (layer >= 15 && layer <= 44))) ||
+      approval.keepExistingTracksAndVias !== true ||
+      !['SPEED', 'COMPLETION'].includes(approval.optimization)) {
     return {
       status: 'STALE_BOARD',
       blockers: ['explicit-router-approval-and-matching-fingerprint-required'],
@@ -748,6 +776,11 @@ export async function runApprovedNativeAutorouting(
       documentUuid: approval.documentUuid,
       expectedFingerprint,
       proposalId: approval.proposalId,
+      routingNets: approval.routingNets,
+      ignoreNets: approval.ignoreNets,
+      enabledLayers: approval.enabledLayers,
+      keepExistingTracksAndVias: true,
+      optimization: approval.optimization,
       confirmWrite: true,
     });
   } catch (error) {
