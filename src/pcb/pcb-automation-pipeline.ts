@@ -72,7 +72,7 @@ export function normalizeNativePcbSnapshot(
   if (!payload.extraction?.positionsExact) blockers.push('native-component-positions-not-exact');
 
   for (const component of payload.components ?? []) {
-    if (!component.ref || !component.mountTechnology) {
+    if (!component.ref || !component.mountTechnology || !component.primitiveId) {
       blockers.push('component-reference-or-mount-technology-missing');
       break;
     }
@@ -510,7 +510,7 @@ function changesFromPreview(
   return (preview.placement?.placements ?? []).flatMap((placement) => {
     const component = byRef.get(placement.ref);
     if (!component) return [];
-    const primitiveId = (component as PlacementComponent & { primitiveId?: string }).primitiveId;
+    const primitiveId = component.primitiveId;
     if (!primitiveId) return [];
     return [{
       primitiveId,
