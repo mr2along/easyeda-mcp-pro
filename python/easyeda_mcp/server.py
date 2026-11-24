@@ -177,6 +177,60 @@ async def easyeda_native_read(method: str, params: dict[str, Any] | None = None)
     return {"method": method, "result": await bridge.call(method, params or {})}
 
 @mcp.tool()
+async def easyeda_pcb_inspect_snapshot(limit: int = 1000) -> dict[str, Any]:
+    """Read a conservative PCB inventory snapshot from the active EasyEDA document.
+
+    The result deliberately marks outline, pad geometry and courtyard data incomplete:
+    current bridge wrappers do not provide all geometry required for automatic placement.
+    """
+    if limit < 1 or limit > 5000:
+        raise ValueError("limit must be between 1 and 5000")
+    methods = {
+        "dimensions": ("board.getDimensions", {}),
+        "layers": ("board.listLayers", {}),
+        "stackup": ("board.getStackup", {}),
+        "components": ("pcb.listComponents", {"limit": limit, "offset": 0}),
+        "tracks": ("pcb.listTracks", {"limit": limit, "offset": 0}),
+        "vias": ("pcb.listVias", {"limit": limit, "offset": 0}),
+        "fills": ("pcb.listFills", {"limit": limit, "offset": 0}),
+        "pours": ("pcb.listPours", {"limit": limit, "offset": 0}),
+        "regions": ("pcb.listRegions", {"limit": limit, "offset": 0}),
+    }
+    async def read_one(key: str, method: str, params: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        try:
+            return key, {"ok": True, "method": method,
+                         "result": await bridge.call(method, params)}
+        except Exception as exc:
+            return key, {"ok": False, "method": method, "error": str(exc)}
+    results = await asyncio.gather(
+        *(read_one(key, method, params) for key, (method, params) in methods.items())
+    )
+    data = dict(results)
+    return {
+        "schema_version": "1.0",
+        "source": "easyeda_pro_native_bridge",
+        "data": data,
+        "completeness": {
+            "board_dimensions": data["dimensions"]["ok"],
+            "board_outline_polygon": False,
+            "component_inventory": data["components"]["ok"],
+            "pad_connectivity_and_geometry": False,
+            "courtyard_geometry": False,
+            "tracks": data["tracks"]["ok"],
+            "vias": data["vias"]["ok"],
+            "fills": data["fills"]["ok"],
+            "pours": data["pours"]["ok"],
+            "regions": data["regions"]["ok"],
+        },
+        "placement_optimization_ready": False,
+        "blocking_reason": [
+            "Exact closed board-outline polygon is not yet extracted.",
+            "Normalized pad XY/shape/dimensions and footprint courtyard are not yet complete.",
+        ],
+    }
+
+
+@mcp.tool()
 async def easyeda_native_write_preview(method: str, params: dict[str, Any]) -> dict[str, Any]:
     """Preview a native write request without executing or changing the PCB."""
     if method not in NATIVE_METHODS or method in READ_ONLY:
