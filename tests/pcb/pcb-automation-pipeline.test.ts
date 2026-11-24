@@ -3,6 +3,7 @@ import {
   applyApprovedPcbPlacement,
   createPcbPlacementPreview,
   normalizeNativePcbSnapshot,
+  runApprovedNativeAutorouting,
   type NativePcbExtractionPayload,
   type PcbAutomationAdapter,
 } from '../../src/pcb/pcb-automation-pipeline.js';
@@ -205,5 +206,71 @@ describe('native PCB automation pipeline', () => {
     });
     expect(result.status).toBe('DRC_FAILED');
     expect(result.nativeWritePerformed).toBe(true);
+  });
+});
+
+
+describe('approved native autorouting', () => {
+  it('does not call the native router when no explicit approval is supplied', async () => {
+    const payload = nativePayload();
+    const adapter: PcbAutomationAdapter = {
+      extractNativeSnapshot: vi.fn(async () => payload),
+      runNativeAutorouting: vi.fn(async () => ({
+        status: 'COMPLETED',
+        unroutedNetCount: 0,
+        failedNetNames: [],
+      })),
+      applyPlacementChanges: vi.fn(),
+      readBackAndCompare: vi.fn(),
+      runPcbDrc: vi.fn(),
+    };
+    const result = await runApprovedNativeAutorouting(
+      adapter,
+      undefined as never,
+      payload.fingerprint,
+    );
+    expect(result.status).toBe('STALE_BOARD');
+    expect(result.nativeWritePerformed).toBe(false);
+    expect(adapter.runNativeAutorouting).not.toHaveBeenCalled();
+  });
+
+  it('runs native autorouting only after approval and requires post-route DRC', async () => {
+    const payload = nativePayload();
+    const adapter: PcbAutomationAdapter = {
+      extractNativeSnapshot: vi.fn(async () => payload),
+      runNativeAutorouting: vi.fn(async () => ({
+        status: 'COMPLETED',
+        unroutedNetCount: 0,
+        failedNetNames: [],
+        routedLengthMm: 35.2,
+        viaCount: 1,
+      })),
+      applyPlacementChanges: vi.fn(),
+      readBackAndCompare: vi.fn(),
+      runPcbDrc: vi.fn(async () => ({
+        passed: true,
+        errorCount: 0,
+        warningCount: 0,
+        violations: [],
+      })),
+    };
+    const result = await runApprovedNativeAutorouting(
+      adapter,
+      {
+        approved: true,
+        proposalId: 'pcbprop_12345678',
+        sourceFingerprint: payload.fingerprint,
+        projectUuid: 'project-1',
+        documentUuid: 'pcb-1',
+      },
+      payload.fingerprint,
+    );
+    expect(result.status).toBe('ROUTED_AND_DRC_VERIFIED');
+    expect(result.nativeWritePerformed).toBe(true);
+    expect(adapter.runNativeAutorouting).toHaveBeenCalledWith(expect.objectContaining({
+      confirmWrite: true,
+      expectedFingerprint: payload.fingerprint,
+    }));
+    expect(adapter.runPcbDrc).toHaveBeenCalledTimes(1);
   });
 });
