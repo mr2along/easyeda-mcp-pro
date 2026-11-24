@@ -461,6 +461,12 @@ export function optimizeComponentPlacement(
     if (component.sideOverride && !component.sideOverride.reason.trim()) {
       blockers.push(`Component ${component.ref} side override requires an engineering reason.`);
     }
+    if (component.mountTechnology === 'TH' && component.sideOverride?.side === 'BOTTOM') {
+      blockers.push(`Component ${component.ref} is THT and cannot override the TOP assembly-side rule.`);
+    }
+    if (component.mountTechnology === 'SMD' && component.sideOverride?.side === 'TOP') {
+      blockers.push(`Component ${component.ref} is SMD and cannot override the BOTTOM assembly-side rule.`);
+    }
     if (component.side && requiredComponentSide(component) && component.side !== requiredComponentSide(component)) {
       blockers.push(`Component ${component.ref} is on ${component.side} but its mount technology requires ${requiredComponentSide(component)}.`);
     }
