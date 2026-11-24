@@ -1,0 +1,209 @@
+import { describe, expect, it, vi } from 'vitest';
+import {
+  applyApprovedPcbPlacement,
+  createPcbPlacementPreview,
+  normalizeNativePcbSnapshot,
+  type NativePcbExtractionPayload,
+  type PcbAutomationAdapter,
+} from '../../src/pcb/pcb-automation-pipeline.js';
+
+function nativePayload(): NativePcbExtractionPayload {
+  return {
+    identity: {
+      projectUuid: 'project-1',
+      documentUuid: 'pcb-1',
+      documentName: 'LED Driver 100W',
+      editorVersion: '3.2.209',
+    },
+    units: 'mm',
+    board: {
+      outline: [
+        { x: 0, y: 0 },
+        { x: 20, y: 0 },
+        { x: 20, y: 20 },
+        { x: 0, y: 20 },
+      ],
+      gridMm: 0.25,
+      componentClearanceMm: 0.2,
+    },
+    components: [
+      {
+        primitiveId: 'native-u1',
+        ref: 'U1',
+        mountTechnology: 'TH',
+        x: 5,
+        y: 5,
+        rotationDeg: 0,
+        side: 'TOP',
+        fixed: true,
+        courtyard: [
+          { x: -1, y: -1 },
+          { x: 1, y: -1 },
+          { x: 1, y: 1 },
+          { x: -1, y: 1 },
+        ],
+        pads: [{ id: '1', x: -0.5, y: 0, net: 'VIN' }, { id: '2', x: 0.5, y: 0, net: 'GND' }],
+      },
+    ],
+    nets: [
+      { name: 'VIN', pins: [{ ref: 'U1', padId: '1' }] },
+      { name: 'GND', pins: [{ ref: 'U1', padId: '2' }] },
+    ],
+    extraction: {
+      outlineExact: true,
+      courtyardsExact: true,
+      padsExact: true,
+      netsExact: true,
+      positionsExact: true,
+      unsupportedFields: [],
+      warnings: [],
+    },
+    fingerprint: 'native-board-fingerprint-001',
+  };
+}
+
+describe('native PCB automation pipeline', () => {
+  it('rejects bounding-box-only or incomplete native geometry', () => {
+    const payload = nativePayload();
+    payload.extraction.courtyardsExact = false;
+    expect(() => normalizeNativePcbSnapshot(payload)).toThrow(/courtyards-not-exact/);
+  });
+
+  it('builds a read-only placement preview from exact native evidence', async () => {
+    const adapter = {
+      extractNativeSnapshot: vi.fn(async () => nativePayload()),
+    } as unknown as PcbAutomationAdapter;
+    const preview = await createPcbPlacementPreview(adapter, {
+      placement: { iterations: 0 },
+    });
+    expect(preview.status).toBe('PREVIEW_READY');
+    expect(preview.nativeWritePerformed).toBe(false);
+    expect(preview.requiresHumanApproval).toBe(true);
+    expect(preview.routing?.source).toBe('GEOMETRY_HEURISTIC');
+  });
+
+  it('does not apply without matching explicit approval', async () => {
+    const adapter = {
+      extractNativeSnapshot: vi.fn(async () => nativePayload()),
+      applyPlacementChanges: vi.fn(),
+      readBackAndCompare: vi.fn(),
+      runPcbDrc: vi.fn(),
+    } as unknown as PcbAutomationAdapter;
+    const preview = await createPcbPlacementPreview(adapter, {
+      placement: { iterations: 0 },
+    });
+    const result = await applyApprovedPcbPlacement(adapter, preview, {
+      approved: true,
+      proposalId: 'wrong-proposal',
+      sourceFingerprint: preview.sourceFingerprint,
+      projectUuid: 'project-1',
+      documentUuid: 'pcb-1',
+    });
+    expect(result.status).toBe('WRITE_REJECTED');
+    expect(result.nativeWritePerformed).toBe(false);
+    expect(adapter.applyPlacementChanges).not.toHaveBeenCalled();
+  });
+
+  it('rejects stale native board state before writing', async () => {
+    let reads = 0;
+    const adapter = {
+      extractNativeSnapshot: vi.fn(async () => {
+        reads++;
+        const payload = nativePayload();
+        if (reads > 1) payload.fingerprint = 'different-board-fingerprint-002';
+        return payload;
+      }),
+      applyPlacementChanges: vi.fn(),
+    } as unknown as PcbAutomationAdapter;
+    const preview = await createPcbPlacementPreview(adapter, {
+      placement: { iterations: 0 },
+    });
+    const result = await applyApprovedPcbPlacement(adapter, preview, {
+      approved: true,
+      proposalId: preview.proposalId,
+      sourceFingerprint: preview.sourceFingerprint,
+      projectUuid: 'project-1',
+      documentUuid: 'pcb-1',
+    });
+    expect(result.status).toBe('WRITE_REJECTED');
+    expect(result.blockers).toContain('board-changed-after-preview-or-focus-changed');
+    expect(adapter.applyPlacementChanges).not.toHaveBeenCalled();
+  });
+
+  it('requires native write receipt, readback match and clean DRC for verified status', async () => {
+    const payload = nativePayload();
+    const adapter: PcbAutomationAdapter = {
+      extractNativeSnapshot: vi.fn(async () => payload),
+      applyPlacementChanges: vi.fn(async ({ changes }) => ({
+        success: true,
+        appliedPrimitiveIds: changes.map((change) => change.primitiveId),
+        failedPrimitiveIds: [],
+        allWritesVerified: true,
+        errors: [],
+      })),
+      readBackAndCompare: vi.fn(async () => ({
+        snapshot: normalizeNativePcbSnapshot(payload),
+        mismatches: [],
+      })),
+      runPcbDrc: vi.fn(async () => ({
+        passed: true,
+        errorCount: 0,
+        warningCount: 0,
+        violations: [],
+      })),
+    };
+    const preview = await createPcbPlacementPreview(adapter, {
+      placement: { iterations: 0 },
+    });
+    const result = await applyApprovedPcbPlacement(adapter, preview, {
+      approved: true,
+      proposalId: preview.proposalId,
+      sourceFingerprint: preview.sourceFingerprint,
+      projectUuid: 'project-1',
+      documentUuid: 'pcb-1',
+    });
+    expect(result.status).toBe('APPLIED_AND_VERIFIED');
+    expect(result.nativeWritePerformed).toBe(true);
+    expect(result.savePerformed).toBe(false);
+    expect(adapter.applyPlacementChanges).toHaveBeenCalledWith(expect.objectContaining({
+      confirmWrite: true,
+      expectedFingerprint: payload.fingerprint,
+    }));
+    expect(adapter.readBackAndCompare).toHaveBeenCalledTimes(1);
+    expect(adapter.runPcbDrc).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports DRC failure after a successful native write', async () => {
+    const payload = nativePayload();
+    const adapter: PcbAutomationAdapter = {
+      extractNativeSnapshot: vi.fn(async () => payload),
+      applyPlacementChanges: vi.fn(async ({ changes }) => ({
+        success: true,
+        appliedPrimitiveIds: changes.map((change) => change.primitiveId),
+        failedPrimitiveIds: [],
+        allWritesVerified: true,
+        errors: [],
+      })),
+      readBackAndCompare: vi.fn(async () => ({
+        snapshot: normalizeNativePcbSnapshot(payload),
+        mismatches: [],
+      })),
+      runPcbDrc: vi.fn(async () => ({
+        passed: false,
+        errorCount: 1,
+        warningCount: 0,
+        violations: [{ rule: 'clearance', severity: 'error', description: 'Clearance violation' }],
+      })),
+    };
+    const preview = await createPcbPlacementPreview(adapter, { placement: { iterations: 0 } });
+    const result = await applyApprovedPcbPlacement(adapter, preview, {
+      approved: true,
+      proposalId: preview.proposalId,
+      sourceFingerprint: preview.sourceFingerprint,
+      projectUuid: 'project-1',
+      documentUuid: 'pcb-1',
+    });
+    expect(result.status).toBe('DRC_FAILED');
+    expect(result.nativeWritePerformed).toBe(true);
+  });
+});
