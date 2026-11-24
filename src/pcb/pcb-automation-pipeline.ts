@@ -541,9 +541,10 @@ export async function applyApprovedPcbPlacement(
     return { status: 'WRITE_REJECTED', blockers, nativeWritePerformed: false, savePerformed: false };
   }
 
-  const freshPayload = await adapter.extractNativeSnapshot();
+  let freshPayload: NativePcbExtractionPayload;
   let fresh: NativePcbSnapshot;
   try {
+    freshPayload = await adapter.extractNativeSnapshot();
     fresh = normalizeNativePcbSnapshot(freshPayload);
   } catch {
     return {
@@ -573,14 +574,29 @@ export async function applyApprovedPcbPlacement(
       savePerformed: false,
     };
   }
-  const receipt = await adapter.applyPlacementChanges({
-    projectUuid: approval.projectUuid,
-    documentUuid: approval.documentUuid,
-    expectedFingerprint: preview.sourceFingerprint,
-    proposalId: preview.proposalId,
-    changes,
-    confirmWrite: true,
-  });
+  let receipt: NativeApplyReceipt;
+  try {
+    receipt = await adapter.applyPlacementChanges({
+      projectUuid: approval.projectUuid,
+      documentUuid: approval.documentUuid,
+      expectedFingerprint: preview.sourceFingerprint,
+      proposalId: preview.proposalId,
+      changes,
+      confirmWrite: true,
+    });
+  } catch (error) {
+    // A transport/API exception can happen after the editor accepted some writes.
+    // Treat native state as uncertain and require a fresh manual inspection.
+    return {
+      status: 'PARTIAL_WRITE',
+      blockers: [
+        'native-write-outcome-uncertain',
+        error instanceof Error ? error.message : String(error),
+      ],
+      nativeWritePerformed: true,
+      savePerformed: false,
+    };
+  }
   if (!receipt.success || !receipt.allWritesVerified || receipt.failedPrimitiveIds.length > 0) {
     return {
       status: receipt.appliedPrimitiveIds.length > 0 ? 'PARTIAL_WRITE' : 'WRITE_REJECTED',
