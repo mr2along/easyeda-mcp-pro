@@ -62,6 +62,38 @@ describe('component placement optimizer', () => {
     expect(result.blockers.some((item) => item.includes('U1'))).toBe(true);
   });
 
+  it('respects allowed rotations and locked orientation constraints', () => {
+    const result = optimizeComponentPlacement([
+      {
+        ref: 'J1',
+        courtyard: [
+          { x: -4, y: -1 },
+          { x: 4, y: -1 },
+          { x: 4, y: 1 },
+          { x: -4, y: 1 },
+        ],
+        allowedRotations: [90],
+        rotationLocked: true,
+      },
+    ], [], board, { iterations: 300, seed: 8 });
+
+    expect(result.status).toBe('PREVIEW_READY');
+    expect(result.placements[0]?.rotationDeg).toBe(90);
+  });
+
+  it('keeps edge-constrained connectors close to the selected board edge', () => {
+    const result = optimizeComponentPlacement([
+      {
+        ref: 'J1',
+        courtyard: square,
+        edgeConstraint: { side: 'LEFT', maxDistanceMm: 1.5 },
+      },
+    ], [], board, { iterations: 100, seed: 3 });
+
+    expect(result.status).toBe('PREVIEW_READY');
+    expect(result.placements[0]?.x).toBeLessThanOrEqual(3.5);
+  });
+
   it('does not place components inside a keepout', () => {
     const result = optimizeComponentPlacement([
       { ref: 'U1', courtyard: square },
