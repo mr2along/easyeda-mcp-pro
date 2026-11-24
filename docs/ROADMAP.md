@@ -5,6 +5,9 @@ This roadmap describes the intended direction for `easyeda-mcp-pro` for the next
 ## Active delivery milestones
 
 - **PCB capability follow-up** — Target date: Not scheduled. Public trackers: [Copper rebuild #596](https://github.com/oaslananka/easyeda-mcp-pro/issues/596), [side-aware capture #470](https://github.com/oaslananka/easyeda-mcp-pro/issues/470), and [copper-zone contract #480](https://github.com/oaslananka/easyeda-mcp-pro/issues/480). Outcome: restore executable PCB workflows where the supported EasyEDA contract is verifiable while keeping unsupported paths fail-closed.
+  - P0 foundation: define a versioned, millimeter-based normalized PCB model and pure geometry primitives before connecting new algorithms to native EasyEDA operations.
+  - Next: add a provenance-preserving read-only adapter and verify native coordinate conversions against captured evidence; keep ambiguous curves, layers, and coordinate conventions fail-closed.
+  - Placement and routing checks must use known footprints and represented geometry. The normalized model alone does not establish DRC clearance, electrical correctness, or fabrication readiness.
 
 No target date is currently committed for this active work. A target date belongs here only when it is an explicit planning commitment; absence of a date must not be replaced with an inferred deadline.
 
