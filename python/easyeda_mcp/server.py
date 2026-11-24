@@ -88,7 +88,7 @@ class Session:
 class NativeBridge:
     def __init__(self) -> None:
         self.host = os.getenv("BRIDGE_HOST", "127.0.0.1")
-        self.port = int(os.getenv("BRIDGE_PORT", "8765"))
+        self.port = int(os.getenv("BRIDGE_PORT", "49620"))
         self.session: Session | None = None
         self.server = None
 
@@ -143,7 +143,10 @@ class NativeBridge:
                                 f"{err.get('code', 'UNKNOWN')}: {err.get('message', 'Native call failed')}"
                             ))
                 elif msg.get("type") == "heartbeat":
-                    continue
+                    await ws.send(json.dumps({
+                        "type": "heartbeat", "timestamp": int(asyncio.get_running_loop().time() * 1000),
+                        "source": "server",
+                    }))
         finally:
             if self.session and self.session.ws is ws:
                 self.session = None
