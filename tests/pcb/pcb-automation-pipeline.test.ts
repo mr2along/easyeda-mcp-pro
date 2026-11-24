@@ -168,6 +168,8 @@ describe('native PCB automation pipeline', () => {
     expect(result.savePerformed).toBe(false);
     expect(adapter.applyPlacementChanges).toHaveBeenCalledWith(expect.objectContaining({
       confirmWrite: true,
+      routingNets: ['VIN', 'GND'],
+      enabledLayers: [1, 2],
       expectedFingerprint: payload.fingerprint,
     }));
     expect(adapter.readBackAndCompare).toHaveBeenCalledTimes(1);
@@ -258,6 +260,12 @@ describe('approved native autorouting', () => {
       adapter,
       {
         approved: true,
+        operation: 'NATIVE_AUTOROUTE',
+        routingNets: ['VIN', 'GND'],
+        ignoreNets: [],
+        enabledLayers: [1, 2],
+        keepExistingTracksAndVias: true,
+        optimization: 'COMPLETION',
         proposalId: 'pcbprop_12345678',
         sourceFingerprint: payload.fingerprint,
         projectUuid: 'project-1',
