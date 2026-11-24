@@ -67,7 +67,7 @@ export interface PlacementMetrics {
   weightedHpwlMm: number;
   totalHpwlMm: number;
   estimatedNetCount: number;
-  estimatedViaPressure: number;
+  routingPressureIndex: number;
   groupDispersionMm: number;
   boardUtilization: number;
   placedCount: number;
@@ -306,13 +306,13 @@ function computeMetrics(
   }, 0);
   const boardUtilization = boardArea > 0 ? Math.min(1, componentArea / boardArea) : 0;
   const areaRatio = Math.max(EPSILON, (outlineBounds.maxX - outlineBounds.minX) * (outlineBounds.maxY - outlineBounds.minY));
-  const estimatedViaPressure = Math.min(1, weightedHpwlMm / (Math.sqrt(areaRatio) * Math.max(1, nets.length) * 8));
-  const objective = weightedHpwlMm + groupDispersionMm * 0.35 + estimatedViaPressure * 20;
+  const routingPressureIndex = Math.min(1, weightedHpwlMm / (Math.sqrt(areaRatio) * Math.max(1, nets.length) * 8));
+  const objective = weightedHpwlMm + groupDispersionMm * 0.35 + routingPressureIndex * 20;
   return {
     weightedHpwlMm,
     totalHpwlMm,
     estimatedNetCount,
-    estimatedViaPressure,
+    routingPressureIndex,
     groupDispersionMm,
     boardUtilization,
     placedCount: placements.length,
@@ -426,6 +426,15 @@ export function optimizeComponentPlacement(
     grid,
   );
   const placements = initialized.placements;
+  const initiallyPlaced = placements.filter((item) =>
+    item.component.x !== undefined && item.component.y !== undefined);
+  for (let index = 0; index < initiallyPlaced.length; index++) {
+    const item = initiallyPlaced[index]!;
+    const others = initiallyPlaced.filter((candidate) => candidate.component.ref !== item.component.ref);
+    if (!legalPlacement(item, others, board)) {
+      blockers.push(`Existing placement for ${item.component.ref} violates board, keepout, or component-clearance geometry.`);
+    }
+  }
   if (initialized.unplaced.length > 0) {
     blockers.push(`Unable to find legal initial locations for: ${initialized.unplaced.join(', ')}`);
   }
@@ -474,16 +483,17 @@ export function optimizeComponentPlacement(
   if (nets.some((net) => net.pins.some((pin) => !refs.has(pin.ref)))) {
     warnings.push('Some net pins reference components not present in the placement input; those pins were ignored.');
   }
+  warnings.push('Routing-pressure index is a normalized placement heuristic, not a predicted via count or routing-success probability.');
   if (nets.some((net) => net.pins.length > 2)) {
     warnings.push('HPWL is a placement proxy only; multi-terminal nets need detailed route/congestion analysis.');
   }
   if (initialized.unplaced.length > 0) {
     warnings.push('Partial result is not suitable for routing until every component has a legal location.');
   }
-  const status = initialized.unplaced.length > 0
-    ? 'PARTIAL'
-    : blockers.length > 0
-      ? 'NO_FEASIBLE_PLACEMENT'
+  const status = blockers.length > 0 && initialized.unplaced.length === 0
+    ? 'NO_FEASIBLE_PLACEMENT'
+    : initialized.unplaced.length > 0
+      ? 'PARTIAL'
       : 'PREVIEW_READY';
 
   return {
