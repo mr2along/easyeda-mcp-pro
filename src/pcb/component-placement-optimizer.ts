@@ -30,6 +30,10 @@ export interface PlacementComponent {
   placementPriority?: number;
   /** Preferred distance from board edge, in mm. */
   edgeClearanceMm?: number;
+  allowedRotations?: Array<0 | 90 | 180 | 270>;
+  rotationLocked?: boolean;
+  allowedRegion?: Point2D[];
+  edgeConstraint?: { side: 'LEFT' | 'RIGHT' | 'TOP' | 'BOTTOM'; maxDistanceMm: number };
 }
 
 export interface PlacementNet {
@@ -219,6 +223,14 @@ function snap(value: number, grid: number): number {
   return Math.round(value / grid) * grid;
 }
 
+function allowedRotations(component: PlacementComponent): Array<0 | 90 | 180 | 270> {
+  if (component.rotationLocked) return [component.rotationDeg ?? 0];
+  const requested = component.allowedRotations?.length
+    ? component.allowedRotations
+    : [...ROTATIONS];
+  return [...new Set(requested)];
+}
+
 function legalPlacement(
   candidate: InternalPlacement,
   placed: InternalPlacement[],
@@ -227,6 +239,18 @@ function legalPlacement(
   const shape = transformPolygon(candidate);
   const edgeClearance = Math.max(board.edgeClearanceMm ?? 0, candidate.component.edgeClearanceMm ?? 0);
   if (!polygonInsideBoard(shape, board.outline, edgeClearance)) return false;
+  if (candidate.component.allowedRegion &&
+      !polygonInsideBoard(shape, candidate.component.allowedRegion, 0)) return false;
+  const edgeConstraint = candidate.component.edgeConstraint;
+  if (edgeConstraint) {
+    const shapeBounds = boundsOf(shape);
+    const boardBounds = boundsOf(board.outline);
+    const edgeDistance = edgeConstraint.side === 'LEFT' ? shapeBounds.minX - boardBounds.minX
+      : edgeConstraint.side === 'RIGHT' ? boardBounds.maxX - shapeBounds.maxX
+        : edgeConstraint.side === 'TOP' ? boardBounds.maxY - shapeBounds.maxY
+          : shapeBounds.minY - boardBounds.minY;
+    if (edgeDistance > edgeConstraint.maxDistanceMm + EPSILON) return false;
+  }
   for (const keepout of board.keepouts ?? []) {
     if (polygonsIntersect(shape, keepout.points)) return false;
   }
@@ -354,7 +378,7 @@ function initializeMissing(
     let best: InternalPlacement | undefined;
     let bestCost = Number.POSITIVE_INFINITY;
     let checked = 0;
-    for (const rotationDeg of ROTATIONS) {
+    for (const rotationDeg of allowedRotations(component)) {
       for (let y = outlineBounds.minY; y <= outlineBounds.maxY && checked < maxCandidates; y += grid * 2) {
         for (let x = outlineBounds.minX; x <= outlineBounds.maxX && checked < maxCandidates; x += grid * 2) {
           checked++;
@@ -400,11 +424,23 @@ export function optimizeComponentPlacement(
   if (board.outline.length < 3) blockers.push('Board outline must contain at least three polygon points.');
   if (grid <= 0) blockers.push('Placement grid must be greater than zero.');
   if (components.length === 0) blockers.push('No components were supplied.');
+  for (const keepout of board.keepouts ?? []) {
+    if (keepout.points.length < 3) blockers.push(`Keepout ${keepout.id ?? '(unnamed)'} has an invalid polygon.`);
+  }
   const refs = new Set<string>();
   for (const component of components) {
     if (refs.has(component.ref)) blockers.push(`Duplicate component reference: ${component.ref}`);
     refs.add(component.ref);
     if (component.courtyard.length < 3) blockers.push(`Component ${component.ref} has no valid courtyard polygon.`);
+    if (component.allowedRotations?.some((rotation) => !ROTATIONS.includes(rotation))) {
+      blockers.push(`Component ${component.ref} has an unsupported allowed rotation.`);
+    }
+    if (component.edgeConstraint && component.edgeConstraint.maxDistanceMm < 0) {
+      blockers.push(`Component ${component.ref} has a negative edge-constraint distance.`);
+    }
+    if (component.allowedRegion && component.allowedRegion.length < 3) {
+      blockers.push(`Component ${component.ref} has an invalid allowed-region polygon.`);
+    }
   }
   if (blockers.length > 0) {
     return {
@@ -453,7 +489,10 @@ export function optimizeComponentPlacement(
       const index = current.findIndex((item) => item.component.ref === selected.component.ref);
       const before = current[index]!;
       const moveScale = Math.max(grid, 5 * (1 - step / iterations));
-      const nextRotation = random() < 0.12 ? choose([...ROTATIONS], random) : before.rotationDeg;
+      const rotationChoices = allowedRotations(before.component);
+      const nextRotation = !before.component.rotationLocked && random() < 0.12
+        ? choose(rotationChoices, random)
+        : before.rotationDeg;
       const candidate: InternalPlacement = {
         ...before,
         x: snap(before.x + (random() - 0.5) * moveScale * 2, grid),
