@@ -20,6 +20,8 @@ export interface PlacementPad {
 
 export interface PlacementComponent {
   ref: string;
+  /** Native EasyEDA PCB component primitive ID; required by the apply adapter. */
+  primitiveId?: string;
   /** Explicit footprint assembly technology; never infer from refdes alone. */
   mountTechnology: MountTechnology;
   /** Optional side override for reviewed hybrid/exceptional footprints. */
